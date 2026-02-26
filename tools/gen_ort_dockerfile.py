@@ -677,15 +677,16 @@ CMD ["/bin/bash"]
 
 
 def preprocess_gpu_flags():
-    if "CUDNN_VERSION" in os.environ:
-        if FLAGS.cudnn_home is None:
-            FLAGS.cudnn_home = "/usr"
+    if not FLAGS.enable_rocm:
+        if "CUDNN_VERSION" in os.environ:
+            if FLAGS.cudnn_home is None:
+                FLAGS.cudnn_home = "/usr"
 
-    if FLAGS.cuda_home is None:
-        FLAGS.cuda_home = "/usr/local/cuda"
+        if FLAGS.cuda_home is None:
+            FLAGS.cuda_home = "/usr/local/cuda"
 
-    if (FLAGS.cuda_home is None) or (FLAGS.cudnn_home is None):
-        print("error: linux build requires --cudnn-home and --cuda-home")
+        if (FLAGS.cuda_home is None) or (FLAGS.cudnn_home is None):
+            print("error: linux build requires --cudnn-home and --cuda-home")
 
     if FLAGS.tensorrt_home is None:
         if target_platform() == "rhel":
@@ -696,10 +697,10 @@ def preprocess_gpu_flags():
         else:
             FLAGS.tensorrt_home = "/usr/src/tensorrt"
 
-        # ROCm defaults
-        if FLAGS.enable_rocm:
-            if FLAGS.rocm_home is None:
-                FLAGS.rocm_home = "/opt/rocm"
+    # ROCm defaults
+    if FLAGS.enable_rocm:
+        if FLAGS.rocm_home is None:
+            FLAGS.rocm_home = "/opt/rocm"
 
 
 if __name__ == "__main__":

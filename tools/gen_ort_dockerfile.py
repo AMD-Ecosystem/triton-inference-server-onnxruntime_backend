@@ -233,7 +233,7 @@ RUN dnf install -y \\
 
 ENV PATH="/opt/_internal/pipx/shared/bin:$PATH"
 RUN pip3 install \\
-       cmake==3.31.8 \\
+       cmake==3.31.10 \\
        numpy \\
        packaging \\
        patchelf==0.17.2 \\
@@ -297,7 +297,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
         zip
 
 RUN pip3 install \\
-       cmake==3.31.8 \\
+       cmake==3.31.10 \\
        numpy \\
        packaging \\
        patchelf==0.17.2 \\

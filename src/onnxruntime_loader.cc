@@ -30,6 +30,7 @@
 #include <unistd.h>
 
 #include <codecvt>
+#include <cstring>
 #include <future>
 #include <locale>
 #include <string>
@@ -48,7 +49,6 @@ OnnxLoaderDlAnchor()
 }
 
 // ROCm 10 pip packages ship MIGraphX as libmigraphx-ep.so (plugin EP).
-// SessionOptionsAppendExecutionProvider("MIGraphX") needs it registered first.
 TRITONSERVER_Error*
 RegisterMIGraphXPlugin(OrtEnv* env)
 {
@@ -208,6 +208,65 @@ OnnxLoader::IsGlobalThreadPoolEnabled()
 
   return false;
 }
+
+#ifdef TRITON_ENABLE_ONNXRUNTIME_MIGRAPHX
+TRITONSERVER_Error*
+OnnxLoader::AppendMIGraphXExecutionProvider(
+    OrtSessionOptions* session_options, const int32_t device_id,
+    const std::vector<std::string>& keys,
+    const std::vector<std::string>& values)
+{
+  if (loader == nullptr) {
+    return TRITONSERVER_ErrorNew(
+        TRITONSERVER_ERROR_UNAVAILABLE,
+        "OnnxLoader singleton has not been initialized");
+  }
+
+  const OrtEpDevice* const* ep_devices = nullptr;
+  size_t ep_device_count = 0;
+  RETURN_IF_ORT_ERROR(
+      ort_api->GetEpDevices(loader->env_, &ep_devices, &ep_device_count));
+
+  std::vector<const OrtEpDevice*> migraphx_devices;
+  for (size_t idx = 0; idx < ep_device_count; ++idx) {
+    const char* ep_name = ort_api->EpDevice_EpName(ep_devices[idx]);
+    if ((ep_name != nullptr) &&
+        (std::strcmp(ep_name, "MIGraphXExecutionProvider") == 0)) {
+      migraphx_devices.push_back(ep_devices[idx]);
+    }
+  }
+
+  if ((device_id < 0) ||
+      (static_cast<size_t>(device_id) >= migraphx_devices.size())) {
+    return TRITONSERVER_ErrorNew(
+        TRITONSERVER_ERROR_INVALID_ARG,
+        (std::string("MIGraphX plugin has ") +
+         std::to_string(migraphx_devices.size()) +
+         " GPU device(s), but device " + std::to_string(device_id) +
+         " was requested")
+            .c_str());
+  }
+
+  std::vector<const char*> option_keys;
+  std::vector<const char*> option_values;
+  for (size_t idx = 0; idx < keys.size(); ++idx) {
+    option_keys.push_back(keys[idx].c_str());
+    option_values.push_back(values[idx].c_str());
+  }
+
+  const OrtEpDevice* selected_device = migraphx_devices[device_id];
+  RETURN_IF_ORT_ERROR(ort_api->SessionOptionsAppendExecutionProvider_V2(
+      session_options, loader->env_, &selected_device, 1, option_keys.data(),
+      option_values.data(), option_keys.size()));
+
+  LOG_MESSAGE(
+      TRITONSERVER_LOG_INFO,
+      (std::string("MIGraphX plugin execution provider is set on device ") +
+       std::to_string(device_id))
+          .c_str());
+  return nullptr;
+}
+#endif  // TRITON_ENABLE_ONNXRUNTIME_MIGRAPHX
 
 TRITONSERVER_Error*
 OnnxLoader::LoadSession(

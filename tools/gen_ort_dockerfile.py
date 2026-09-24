@@ -297,14 +297,15 @@ RUN pip3 install \\
 ENV VERBOSE=1
 """
 
-    # ROCm: install build tools; MIGraphX and ONNX Runtime are built from source below
+    # ROCm: pip-install MIGraphX + ORT (no source build)
     if FLAGS.enable_rocm:
         df += """
-# ROCm: install build tools (MIGraphX and ONNX Runtime built from source in this image)
+# Official ROCm 10 images omit this file; some tools expect /^X.Y.Z-.*$/
+RUN mkdir -p /opt/rocm/.info && echo '10.0.0-0' > /opt/rocm/.info/version
 RUN apt-get update && \\
     apt-get install -y --no-install-recommends \\
-        sudo git apt-utils bash build-essential curl \\
-        python3-dev python3-pip aria2 libnuma-dev pkg-config ccache \\
+        ca-certificates curl git python3-dev python3-pip python3-venv \\
+        patchelf wget \\
     && rm -rf /var/lib/apt/lists/*
 """
 
@@ -357,49 +358,27 @@ ENV PYTHONPATH=$INTEL_OPENVINO_DIR/python/python3.12:$INTEL_OPENVINO_DIR/python/
             openvino_toolkit_filename, openvino_folder_name
         )
 
-    # ROCm: Build MIGraphX and ONNX Runtime from source (NVIDIA-style, inside this image)
+    # ROCm 10.0.0: install MIGraphX then ONNX Runtime MIGraphX EP from AMD pip.
+    # https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/inference/migraphx.html
+    # https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/inference/onnxruntime.html
     if FLAGS.enable_rocm:
         df += """
-#
-# Build MIGraphX from source
-#
-ARG MIGRAPHX_REPO={}
-ARG MIGRAPHX_BRANCH={}
-ARG ONNXRUNTIME_VERSION
-ARG ONNXRUNTIME_REPO={}
-ARG ONNXRUNTIME_BRANCH={}
-ARG ONNXRUNTIME_BUILD_CONFIG
+RUN pip3 install --no-cache-dir wheel
+RUN pip3 install --no-cache-dir \\
+      --index-url https://stable.repo.amd.com/rocm/migraphx/whl-next/ \\
+      --extra-index-url https://pypi.org/simple \\
+      "migraphx==2.17.0+rocm10.0.0"
+RUN pip3 install --no-cache-dir \\
+      --extra-index-url https://stable.repo.amd.com/rocm/onnxruntime/whl-next/ \\
+      "onnxruntime-ep-migraphx==1.0.0+rocm10.0.0"
 
-RUN pip3 install --no-cache-dir wheel build && \\
-    git clone ${{MIGRAPHX_REPO}} --recursive -b ${{MIGRAPHX_BRANCH}} migraphx_src && \\
-    cd migraphx_src && \\
-    pip3 install --no-cache-dir https://github.com/RadeonOpenCompute/rbuild/archive/master.tar.gz && \\
-    rbuild build -d depend -B build -DMIGRAPHX_ENABLE_PYTHON=OFF -DGPU_TARGETS=gfx942 2>&1 | tee migraphx_build.log && \\
-    cd build && \\
-    make -j$(nproc) package && dpkg -i *.deb
-
-ENV MIGRAPHX_MLIR_USE_SPECIFIC_OPS=attention,dot
-ENV MIGRAPHX_ENABLE_MLIR_GEG_FUSION=1
-ENV MIGRAPHX_ENABLE_REWRITE_DOT=1
-
-#
-# Build ONNX Runtime with MIGraphX EP from source
-#
-RUN rm -rf onnxruntime && \\
-    git clone ${{ONNXRUNTIME_REPO}} --recursive -b ${{ONNXRUNTIME_BRANCH}} onnxruntime && \\
-    cd onnxruntime && \\
-    pip install numpy packaging && \\
-    ./build.sh --config ${{ONNXRUNTIME_BUILD_CONFIG}} --allow_running_as_root --rocm_home /opt/rocm --use_migraphx --migraphx_home /opt/rocm --skip_tests --parallel --enable_pybind --build_wheel 2>&1 | tee onnxrt_build.log && \\
-    pip install ./build/Linux/Release/dist/*.whl --force-reinstall && \\
-    cd build/Linux/Release && \\
-    cmake --install . --prefix /opt/rocm && \\
-    echo "ONNX Runtime installed to /opt/rocm with headers and libraries"
-""".format(
-            FLAGS.migraphx_repo,
-            FLAGS.migraphx_branch,
-            FLAGS.onnxruntime_repo,
-            FLAGS.onnxruntime_branch,
-        )
+RUN SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \\
+    ORT_SO=$(ls $SP/onnxruntime/capi/libonnxruntime.so.* | head -1) && \\
+    ln -sf "$ORT_SO" $SP/onnxruntime/capi/libonnxruntime.so.1 && \\
+    ln -sf "$ORT_SO" $SP/onnxruntime/capi/libonnxruntime.so && \\
+    echo "ORT_SO=$ORT_SO SP=$SP" && \\
+    python3 -c "import onnxruntime as ort, onnxruntime_ep_migraphx as m; print('providers_before_register', ort.get_available_providers()); print('ep_names', m.get_ep_names()); print('ep_libs', m.get_library_paths())"
+"""
     ## TEMPORARY: Using the tensorrt-8.0 branch until ORT 1.9 release to enable ORT backend with TRT 8.0 support.
     # For ORT versions 1.8.0 and below the behavior will remain same. For ORT version 1.8.1 we will
     # use tensorrt-8.0 branch instead of using rel-1.8.1
@@ -515,48 +494,45 @@ RUN ./build.sh ${{COMMON_BUILD_ARGS}} --parallel {} --nvcc_threads {} --update -
     if FLAGS.enable_rocm:
         df += """
 #
-# Copy ONNX Runtime artifacts from build to /opt/onnxruntime
+# Stage C++ artifacts for the Triton onnxruntime backend
 #
 WORKDIR /workspace
+RUN mkdir -p /opt/onnxruntime/lib /opt/onnxruntime/include /opt/onnxruntime/bin /opt/onnxruntime/test
 
-RUN mkdir -p /opt/onnxruntime/lib /opt/onnxruntime/include
-
-# Find and copy shared libraries from pip-installed onnxruntime
-# Note: Only MIGraphX EP is used, ROCm EP is skipped
-RUN SITE_PACKAGES=$(python3 -c "import site; print(site.getsitepackages()[0])") && \\
-    echo "Found site-packages at: $SITE_PACKAGES" && \\
-    cp $SITE_PACKAGES/onnxruntime/capi/libonnxruntime.so.* /opt/onnxruntime/lib/ && \\
-    cp $SITE_PACKAGES/onnxruntime/capi/libonnxruntime_providers_shared.so /opt/onnxruntime/lib/ && \\
-    cp $SITE_PACKAGES/onnxruntime/capi/libonnxruntime_providers_migraphx.so /opt/onnxruntime/lib/ && \\
-    cd /opt/onnxruntime/lib && \\
+# Stage ORT + MIGraphX shared libraries from the pip install into /opt/onnxruntime
+RUN SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \\
+    CAPI=$SP/onnxruntime/capi && \\
+    DST=/opt/onnxruntime/lib && \\
+    cp -a $CAPI/libonnxruntime.so* $DST/ 2>/dev/null || true && \\
+    cp -a $CAPI/libonnxruntime_providers_*.so* $DST/ 2>/dev/null || true && \\
+    find $SP $SP/migraphx_libs /opt/rocm/lib -maxdepth 4 \\
+      \\( -name 'libmigraphx*.so*' -o -name '*onnxruntime_ep*.so*' \\) \\
+      -exec cp -a {} $DST/ \\; 2>/dev/null || true && \\
+    ls -l $DST && \\
+    test -n "$(ls $DST/libonnxruntime.so.* 2>/dev/null)" && \\
+    cd $DST && \\
     ORT_SO=$(ls libonnxruntime.so.* | head -1) && \\
-    ln -sf $ORT_SO libonnxruntime.so.1 && \\
-    ln -sf $ORT_SO libonnxruntime.so
+    ln -sfn $ORT_SO libonnxruntime.so.1 && \\
+    ln -sfn $ORT_SO libonnxruntime.so && \\
+    echo 1.29.0 > /opt/onnxruntime/ort_onnx_version.txt && \\
+    printf '%s\\n' $CAPI $SP/migraphx_libs $DST > /etc/ld.so.conf.d/triton-ort.conf && \\
+    ldconfig && \\
+    ls -l $DST
 
-# Copy MIGraphX runtime libraries (built in this image via dpkg) into /opt/onnxruntime/lib
-# so they are included in final artifacts; the provider loads libmigraphx_c.so.3 at runtime.
-# Search /usr, /opt/rocm, /usr/local, and /workspace (dpkg installs to /opt/rocm; build tree under /workspace).
-RUN find /usr /opt/rocm /usr/local /workspace -name 'libmigraphx*.so*' 2>/dev/null | while read f; do cp -P "$f" /opt/onnxruntime/lib/; done && \\
-    (ls /opt/onnxruntime/lib/libmigraphx*.so* 2>/dev/null && echo "MIGraphX runtime libs copied to /opt/onnxruntime/lib") || echo "No MIGraphX libs found under /usr, /opt/rocm, /usr/local, or /workspace"
+# C headers are not in the pip wheel; fetch the matching ORT 1.29 public headers
+RUN for h in onnxruntime_c_api.h onnxruntime_session_options_config_keys.h \\
+        onnxruntime_ep_c_api.h onnxruntime_error_code.h; do \\
+      wget -q -O /opt/onnxruntime/include/$h \\
+        https://raw.githubusercontent.com/microsoft/onnxruntime/v1.29.0/include/onnxruntime/core/session/$h; \\
+    done && \\
+    wget -q -O /opt/onnxruntime/include/cpu_provider_factory.h \\
+      https://raw.githubusercontent.com/microsoft/onnxruntime/v1.29.0/include/onnxruntime/core/providers/cpu/cpu_provider_factory.h && \\
+    ls -l /opt/onnxruntime/include /opt/onnxruntime/lib
 
-# Copy header files from installed ONNX Runtime
-# Headers are in /opt/rocm/include/onnxruntime/ (from cmake install)
-RUN echo "Copying header files from /opt/rocm/include/onnxruntime/" && \\
-    cp /opt/rocm/include/onnxruntime/onnxruntime_c_api.h /opt/onnxruntime/include/ && \\
-    cp /opt/rocm/include/onnxruntime/onnxruntime_session_options_config_keys.h /opt/onnxruntime/include/ && \\
-    cp /opt/rocm/include/onnxruntime/cpu_provider_factory.h /opt/onnxruntime/include/ && \\
-    (cp /opt/rocm/include/onnxruntime/onnxruntime_ep_c_api.h /opt/onnxruntime/include/ 2>/dev/null || echo "EP header not found, skipping") && \\
-    echo "${ONNXRUNTIME_VERSION}" > /opt/onnxruntime/ort_onnx_version.txt && \\
-    echo "ONNX Runtime headers and libraries copied to /opt/onnxruntime"
-
-# Set RPATH for all .so files
 RUN cd /opt/onnxruntime/lib && \\
     for i in `find . -mindepth 1 -maxdepth 1 -type f -name '*\\.so*'`; do \\
         patchelf --set-rpath '$ORIGIN' $i || true; \\
     done
-
-# Create bin and test directories
-RUN mkdir -p /opt/onnxruntime/bin /opt/onnxruntime/test
 """
         with open(output_file, "w") as dfile:
             dfile.write(df)

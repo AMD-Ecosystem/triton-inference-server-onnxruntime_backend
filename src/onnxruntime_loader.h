@@ -29,6 +29,8 @@
 
 #include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "triton/backend/backend_common.h"
 #include "triton/core/tritonbackend.h"
@@ -69,6 +71,14 @@ class OnnxLoader {
   /// Returns whether global thread pool is enabled.
   /// If the loader is not initialized it returns false.
   static bool IsGlobalThreadPoolEnabled();
+
+#ifdef TRITON_ENABLE_ONNXRUNTIME_MIGRAPHX
+  /// Append the registered ROCm 10 MIGraphX plugin EP for one GPU.
+  static TRITONSERVER_Error* AppendMIGraphXExecutionProvider(
+      OrtSessionOptions* session_options, const int32_t device_id,
+      const std::vector<std::string>& keys,
+      const std::vector<std::string>& values);
+#endif
 
  private:
   OnnxLoader(OrtEnv* env, bool enable_global_threadpool = false)

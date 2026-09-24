@@ -860,27 +860,13 @@ ModelState::LoadModel(
                 }
               }
 
-              if (stream != nullptr) {
-                keys.push_back("user_compute_stream");
-                values.push_back(std::to_string(
-                    reinterpret_cast<size_t>(stream)));
-              }
-
-              std::vector<const char*> c_keys, c_values;
-              for (size_t i = 0; i < keys.size(); ++i) {
-                c_keys.push_back(keys[i].c_str());
-                c_values.push_back(values[i].c_str());
-              }
-              RETURN_IF_ORT_ERROR(
-                  ort_api->SessionOptionsAppendExecutionProvider(
-                      soptions, "MIGraphX",
-                      c_keys.data(), c_values.data(), keys.size()));
+              RETURN_IF_ERROR(OnnxLoader::AppendMIGraphXExecutionProvider(
+                  soptions, instance_group_device_id, keys, values));
               LOG_MESSAGE(
                   TRITONSERVER_LOG_VERBOSE,
                   (std::string("MIGraphX Execution Accelerator is set for '") +
                    Name() + "' on device " +
-                   std::to_string(instance_group_device_id) +
-                   (stream != nullptr ? " with user compute stream" : ""))
+                   std::to_string(instance_group_device_id))
                       .c_str());
               continue;
             }

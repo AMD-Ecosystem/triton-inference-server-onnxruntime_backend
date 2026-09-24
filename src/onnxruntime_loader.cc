@@ -26,6 +26,9 @@
 
 #include "onnxruntime_loader.h"
 
+#include <dlfcn.h>
+#include <unistd.h>
+
 #include <codecvt>
 #include <future>
 #include <locale>
@@ -35,6 +38,46 @@
 #include "onnxruntime_utils.h"
 
 namespace triton { namespace backend { namespace onnxruntime {
+
+namespace {
+
+#ifdef TRITON_ENABLE_ONNXRUNTIME_MIGRAPHX
+void
+OnnxLoaderDlAnchor()
+{
+}
+
+// ROCm 10 pip packages ship MIGraphX as libmigraphx-ep.so (plugin EP).
+// SessionOptionsAppendExecutionProvider("MIGraphX") needs it registered first.
+TRITONSERVER_Error*
+RegisterMIGraphXPlugin(OrtEnv* env)
+{
+  Dl_info info;
+  if (dladdr(reinterpret_cast<const void*>(&OnnxLoaderDlAnchor), &info) == 0 ||
+      info.dli_fname == nullptr) {
+    return nullptr;
+  }
+  std::string so_path(info.dli_fname);
+  const auto slash = so_path.find_last_of('/');
+  const std::string dir =
+      (slash == std::string::npos) ? std::string(".") : so_path.substr(0, slash);
+  const std::string ep_path = dir + "/libmigraphx-ep.so";
+  if (access(ep_path.c_str(), R_OK) != 0) {
+    LOG_MESSAGE(
+        TRITONSERVER_LOG_WARN,
+        (std::string("MIGraphX EP plugin not found at ") + ep_path).c_str());
+    return nullptr;
+  }
+  RETURN_IF_ORT_ERROR(ort_api->RegisterExecutionProviderLibrary(
+      env, "MIGraphXExecutionProvider", ep_path.c_str()));
+  LOG_MESSAGE(
+      TRITONSERVER_LOG_INFO,
+      (std::string("Registered MIGraphX EP plugin ") + ep_path).c_str());
+  return nullptr;
+}
+#endif  // TRITON_ENABLE_ONNXRUNTIME_MIGRAPHX
+
+}  // namespace
 
 std::unique_ptr<OnnxLoader> OnnxLoader::loader = nullptr;
 
@@ -111,8 +154,11 @@ OnnxLoader::Init(common::TritonJson::Value& backend_config)
       status = ort_api->CreateEnv(logging_level, "log", &env);
     }
 
-    loader.reset(new OnnxLoader(env, global_threadpool_enabled));
     RETURN_IF_ORT_ERROR(status);
+#ifdef TRITON_ENABLE_ONNXRUNTIME_MIGRAPHX
+    RETURN_IF_ERROR(RegisterMIGraphXPlugin(env));
+#endif  // TRITON_ENABLE_ONNXRUNTIME_MIGRAPHX
+    loader.reset(new OnnxLoader(env, global_threadpool_enabled));
   } else {
     return TRITONSERVER_ErrorNew(
         TRITONSERVER_ERROR_ALREADY_EXISTS,

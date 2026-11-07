@@ -309,8 +309,8 @@ ENV VERBOSE=1
     # ROCm: pip-install MIGraphX + ORT (no source build)
     if FLAGS.enable_rocm:
         df += """
-# Official ROCm 10 images omit this file; some tools expect /^X.Y.Z-.*$/
-RUN mkdir -p /opt/rocm/.info && echo '10.1.0-0' > /opt/rocm/.info/version
+# ROCm 10.2.0 RC1 omits this file; some tools expect /^X.Y.Z-.*$/
+RUN mkdir -p /opt/rocm/.info && echo '10.2.0-0' > /opt/rocm/.info/version
 RUN apt-get update && \\
     apt-get install -y --no-install-recommends \\
         ca-certificates curl git python3-dev python3-pip python3-venv \\
@@ -367,7 +367,7 @@ ENV PYTHONPATH=$INTEL_OPENVINO_DIR/python/python3.12:$INTEL_OPENVINO_DIR/python/
             openvino_toolkit_filename, openvino_folder_name
         )
 
-    # ROCm 10.1.0: install MIGraphX then ONNX Runtime MIGraphX EP from AMD pip.
+    # ROCm 10.2.0: install MIGraphX then ONNX Runtime MIGraphX EP from AMD pip.
     # https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/inference/migraphx.html
     # https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/inference/onnxruntime.html
     if FLAGS.enable_rocm:
@@ -376,10 +376,10 @@ RUN pip3 install --no-cache-dir wheel
 RUN pip3 install --no-cache-dir \\
       --index-url https://stable.repo.amd.com/rocm/migraphx/whl-next/ \\
       --extra-index-url https://pypi.org/simple \\
-      "migraphx==2.18.0+rocm10.1.0"
+      "migraphx==2.18.0+rocm10.2.0"
 RUN pip3 install --no-cache-dir \\
       --extra-index-url https://stable.repo.amd.com/rocm/onnxruntime/whl-next/ \\
-      "onnxruntime-ep-migraphx==1.0.0+rocm10.1.0"
+      "onnxruntime-ep-migraphx==1.0.0+rocm10.2.0"
 
 RUN SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \\
     ORT_SO=$(ls $SP/onnxruntime/capi/libonnxruntime.so.* | head -1) && \\

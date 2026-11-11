@@ -370,16 +370,18 @@ ENV PYTHONPATH=$INTEL_OPENVINO_DIR/python/python3.12:$INTEL_OPENVINO_DIR/python/
     # ROCm 10.2.0: install MIGraphX then ONNX Runtime MIGraphX EP from AMD pip.
     # https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/inference/migraphx.html
     # https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/inference/onnxruntime.html
+    # The whl-next index has no rocm10.2.0 build. 2.18.0+rocm10.1.0 is the newest
+    # wheel published for both CPython 3.12 and 3.14.
     if FLAGS.enable_rocm:
         df += """
 RUN pip3 install --no-cache-dir wheel
 RUN pip3 install --no-cache-dir \\
       --index-url https://stable.repo.amd.com/rocm/migraphx/whl-next/ \\
       --extra-index-url https://pypi.org/simple \\
-      "migraphx==2.18.0+rocm10.2.0"
+      "migraphx==2.18.0+rocm10.1.0"
 RUN pip3 install --no-cache-dir \\
       --extra-index-url https://stable.repo.amd.com/rocm/onnxruntime/whl-next/ \\
-      "onnxruntime-ep-migraphx==1.0.0+rocm10.2.0"
+      "onnxruntime-ep-migraphx==1.0.0+rocm10.1.0"
 
 RUN SP=$(python3 -c "import site; print(site.getsitepackages()[0])") && \\
     ORT_SO=$(ls $SP/onnxruntime/capi/libonnxruntime.so.* | head -1) && \\
